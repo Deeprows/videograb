@@ -45,6 +45,7 @@ fun LinkSheet(
     onPick: (MediaInfo, QualityOption) -> Unit,
     onRetry: (url: String, title: String) -> Unit,
     onAnyway: (url: String, title: String) -> Unit,
+    onSignIn: (url: String) -> Unit,
 ) {
     if (state is LinkState.Idle) return
     ModalBottomSheet(
@@ -59,7 +60,7 @@ fun LinkSheet(
             when (state) {
                 is LinkState.Loading -> LoadingBody(state)
                 is LinkState.Ready -> ReadyBody(state.info, onPick)
-                is LinkState.Error -> ErrorBody(state, onRetry, onAnyway)
+                is LinkState.Error -> ErrorBody(state, onRetry, onAnyway, onSignIn)
                 else -> {}
             }
         }
@@ -157,7 +158,11 @@ private fun ErrorBody(
     s: LinkState.Error,
     onRetry: (String, String) -> Unit,
     onAnyway: (String, String) -> Unit,
+    onSignIn: (String) -> Unit,
 ) {
+    val platform = platformOf(s.url)
+    val needsSignIn = platform.cookieSites.isNotEmpty() &&
+        (s.message.contains("sign in", ignoreCase = true) || s.message.contains("login", ignoreCase = true))
     Column(
         Modifier.fillMaxWidth().padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -170,7 +175,14 @@ private fun ErrorBody(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(4.dp))
-        GradientButton("Try again", onClick = { onRetry(s.url, s.title) })
+        if (needsSignIn) {
+            GradientButton("Sign in to ${platform.label}", onClick = { onSignIn(s.url) })
+            OutlinedButton(onClick = { onRetry(s.url, s.title) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                Text("Try again")
+            }
+        } else {
+            GradientButton("Try again", onClick = { onRetry(s.url, s.title) })
+        }
         OutlinedButton(onClick = { onAnyway(s.url, s.title) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
             Text("Download anyway (best quality)")
         }
