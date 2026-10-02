@@ -190,6 +190,15 @@ fun AppRoot(sharedLink: MutableState<String?>, clipLink: MutableState<String?>) 
             tab = Dest.DOWNLOADS
         },
         onRetry = { url, title -> link.open(url, title) },
+        onSignIn = { url ->
+            val p = platformOf(url)
+            link.dismiss()
+            if (p == Platform.YOUTUBE) Prefs.youtubeLogin = true   // user chose to sign in, so use it for YouTube
+            browserTarget = if (p == Platform.YOUTUBE)
+                "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fm.youtube.com%2F"
+            else p.home
+            tab = Dest.BROWSER
+        },
         onAnyway = { url, title ->
             DownloadManager.enqueue(url, title, 0)
             link.dismiss()
