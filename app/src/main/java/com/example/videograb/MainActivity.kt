@@ -96,6 +96,7 @@ fun AppRoot(sharedLink: MutableState<String?>, clipLink: MutableState<String?>) 
     val items by DownloadManager.items.collectAsState()
     val engine by Engine.state.collectAsState()
     val browser = remember { Browser(ctx) }
+    LaunchedEffect(browser) { browser.onFileDownload = { url -> link.open(url) } }
 
     var tab by remember { mutableStateOf(Dest.HOME) }
     var playing by remember { mutableStateOf<DlItem?>(null) }
@@ -157,8 +158,11 @@ fun AppRoot(sharedLink: MutableState<String?>, clipLink: MutableState<String?>) 
                         search = search,
                         clipLink = clipLink.value,
                         engineState = engine,
+                        activeDownloads = activeCount,
                         onDismissClip = { clipLink.value = null },
                         onOpenSite = { browserTarget = it; tab = Dest.BROWSER },
+                        onOpenBrowser = { tab = Dest.BROWSER },
+                        onOpenDownloads = { tab = Dest.DOWNLOADS },
                         onLink = { url, title, thumb -> link.open(url, title, thumb) },
                         onSettings = { showSettings = true }
                     )
