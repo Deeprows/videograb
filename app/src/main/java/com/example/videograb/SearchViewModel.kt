@@ -40,9 +40,20 @@ class SearchViewModel : ViewModel() {
     private var job: Job? = null
     private var gen = 0
 
-    fun loadCategory(i: Int) {
+    // Feed cache: switching tabs or returning Home doesn't hit YouTube again for 30 minutes.
+    private val cache = HashMap<String, Pair<Long, List<SearchResult>>>()
+    private val TTL = 30L * 60 * 1000
+
+    fun loadCategory(i: Int, force: Boolean = false) {
         category = i
-        run(FeedCategories[i].second, FeedCategories[i].first)
+        val (label, query) = FeedCategories[i]
+        val hit = cache[query]
+        if (!force && hit != null && System.currentTimeMillis() - hit.first < TTL) {
+            job?.cancel(); gen++
+            loading = false; error = null; heading = label; results = hit.second
+            return
+        }
+        run(query, label)
     }
 
     fun search(q: String) {
@@ -53,7 +64,7 @@ class SearchViewModel : ViewModel() {
     }
 
     fun refresh() {
-        if (category >= 0) loadCategory(category) else if (heading.isNotBlank()) loadCategory(0)
+        if (category >= 0) loadCategory(category, force = true) else loadCategory(0, force = true)
     }
 
     private fun run(query: String, title: String) {
@@ -65,10 +76,13 @@ class SearchViewModel : ViewModel() {
         job = viewModelScope.launch {
             try {
                 Engine.awaitReady()
+                val cookies = Engine.cookieFile(Platform.YOUTUBE)
                 val found = withContext(Dispatchers.IO) {
                     val req = YoutubeDLRequest("ytsearch15:$query").apply {
                         addOption("--flat-playlist")
                         addOption("--no-warnings")
+                        addOption("--socket-timeout", "15")
+                        if (cookies != null) addOption("--cookies", cookies)
                         addOption("--print", "%(id)s;;;%(title)s;;;%(uploader,channel)s;;;%(duration_string)s")
                     }
                     YoutubeDL.getInstance().execute(req).out.lines().mapNotNull { line ->
@@ -84,11 +98,16 @@ class SearchViewModel : ViewModel() {
                 }
                 if (my != gen) return@launch
                 results = found
+                if (found.isNotEmpty()) cache[query] = System.currentTimeMillis() to found
                 if (found.isEmpty()) error = "No results"
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (my == gen) error = Engine.friendlyError(e.message)
+                if (my == gen) {
+                    error = if (Engine.isBotCheck(e.message))
+                        "YouTube is limiting requests from your network right now. Signing in to YouTube in the Browser tab usually fixes this. You can still paste links."
+                    else Engine.friendlyError(e.message)
+                }
             } finally {
                 if (my == gen) loading = false
             }
