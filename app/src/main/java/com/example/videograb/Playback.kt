@@ -203,7 +203,7 @@ object Playback {
         c.seekTo(if (d != C.TIME_UNSET) target.coerceAtMost(d) else target)
     }
 
-    fun setSpeed(s: Float) { controller?.setPlaybackSpeed(s) }
+    fun changeSpeed(s: Float) { controller?.setPlaybackSpeed(s) }
 
     fun toggleRepeat() {
         val c = controller ?: return
