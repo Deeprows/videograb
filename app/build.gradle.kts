@@ -50,6 +50,6 @@ dependencies {
     implementation("androidx.media3:media3-session:1.4.1")
     implementation("com.google.guava:guava:33.3.1-android")
 
-    implementation("io.github.junkfood02.youtubedl-android:library:0.17.2")
-    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.17.2")
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 }
