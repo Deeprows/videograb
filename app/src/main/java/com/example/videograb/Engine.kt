@@ -94,7 +94,11 @@ object Engine {
             // Flag the update BEFORE announcing Ready, otherwise the first feed request runs
             // while yt-dlp's files are being replaced and fails (the "works only after refresh" bug).
             val due = System.currentTimeMillis() - Prefs.lastUpdate > UPDATE_EVERY_MS
-            if (due) updating.value = true
+            if (due) {
+                // If the update fails or hangs, retry in 30 min instead of blocking every launch.
+                Prefs.lastUpdate = System.currentTimeMillis() - UPDATE_EVERY_MS + 30L * 60 * 1000
+                updating.value = true
+            }
             state.value = EngineState.Ready
             if (due) {
                 try { update(Prefs.nightly) } catch (_: Exception) { } finally { updating.value = false }
@@ -111,7 +115,7 @@ object Engine {
     /** Waits for the engine AND for any update in progress, so yt-dlp is never run mid-update. */
     suspend fun awaitReady() {
         awaitInit()
-        withTimeoutOrNull(90_000) { updating.first { !it } }
+        withTimeoutOrNull(20_000) { updating.first { !it } }
     }
 
     /**
@@ -186,6 +190,15 @@ object Engine {
 
     // ------------------------------------------------------------ link info
     suspend fun fetchInfo(url: String, titleHint: String, thumbHint: String): MediaInfo {
+        val info = withTimeoutOrNull(75_000) { fetchInfoInner(url, titleHint, thumbHint) }
+        if (info == null) {
+            cancelInfo()
+            error("Timed out reading this link. Check your connection and tap Retry.")
+        }
+        return info
+    }
+
+    private suspend fun fetchInfoInner(url: String, titleHint: String, thumbHint: String): MediaInfo {
         awaitReady()
         val platform = platformOf(url)
         val cookies = cookieFile(platform)
@@ -336,12 +349,13 @@ object Engine {
             "login required" in m || "log in" in m || "private video" in m || "this video is private" in m ||
                 "cookies" in m || "rate-limit reached" in m || "sign in" in m ->
                 "This video needs a login. Sign in to the site in the Browser tab, then try again."
+            "timed out reading" in m -> raw!!.removePrefix("ERROR:").trim()
             "unsupported url" in m -> "That link doesn\u2019t point to a video page."
             "not available in your country" in m || "geo" in m && "restrict" in m ->
                 "This video is blocked in your region."
             "429" in m -> "Too many requests. Wait a minute and try again."
             "no space left" in m -> "Your phone is out of storage space."
-            "unable to resolve" in m || "network is unreachable" in m || "timed out" in m ||
+            "unable to resolve" in m || "network is unreachable" in m ||
                 "connection reset" in m || "name or service not known" in m ->
                 "No internet connection. Check your network and retry."
             "unavailable" in m || "removed" in m || "does not exist" in m || "no video could be found" in m ||
