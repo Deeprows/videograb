@@ -1,267 +1,502 @@
 package com.example.videograb
 
-import android.content.ComponentName
+import android.app.Activity
 import android.content.Context
-import android.net.Uri
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import android.media.AudioManager
+import android.os.Build
+import android.view.WindowManager
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.core.content.ContextCompat
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.PlaybackParameters
-import androidx.media3.common.Player
-import androidx.media3.common.Tracks
-import androidx.media3.common.VideoSize
 import androidx.media3.session.MediaController
-import androidx.media3.session.SessionToken
-import com.google.common.util.concurrent.ListenableFuture
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
-/**
- * UI-side handle on the PlaybackService. All state the player screens draw lives here
- * as Compose state, so the full player, the mini player and PiP always agree.
- */
-object Playback {
-    var controller by mutableStateOf<MediaController?>(null)
-        private set
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
-    var showPlayer by mutableStateOf(false)
-    var inPip by mutableStateOf(false)
+private fun clock(ms: Long): String = if (ms <= 0L) "0:00" else fmtDuration(ms / 1000).ifEmpty { "0:00" }
 
-    var hasMedia by mutableStateOf(false)
-    var playWhenReady by mutableStateOf(false)
-    var buffering by mutableStateOf(false)
-    var ended by mutableStateOf(false)
-    var isVideo by mutableStateOf(true)
-    var speed by mutableFloatStateOf(1f)
-    var repeatOne by mutableStateOf(false)
-    var title by mutableStateOf("")
-    var subtitle by mutableStateOf("")
-    var thumb by mutableStateOf("")
-    var index by mutableIntStateOf(0)
-    var count by mutableIntStateOf(0)
-    var videoW by mutableIntStateOf(0)
-    var videoH by mutableIntStateOf(0)
-    var error by mutableStateOf<String?>(null)
+private val Speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
-    private var future: ListenableFuture<MediaController>? = null
-    private val waiting = mutableListOf<(MediaController) -> Unit>()
-    private var queue: List<DlItem> = emptyList()
+private fun speedLabel(s: Float) = (if (s % 1f == 0f) s.toInt().toString() else s.toString()) + "x"
 
-    private val listener = object : Player.Listener {
-        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-            Playback.playWhenReady = playWhenReady
-            if (!playWhenReady) savePosition()
+// ====================================================================== full-screen player
+@Composable
+fun PlayerScreen(onClose: () -> Unit) {
+    val c = Playback.controller
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        if (c == null) {
+            CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
+            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopStart).safeDrawingPadding().padding(4.dp)) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Color.White)
+            }
+            BackHandler(onBack = onClose)
+        } else {
+            PlayerContent(c, onClose)
         }
+    }
+}
 
-        override fun onPlaybackStateChanged(state: Int) {
-            buffering = state == Player.STATE_BUFFERING
-            ended = state == Player.STATE_ENDED
-            if (state == Player.STATE_ENDED) controller?.currentMediaItem?.mediaId?.let { forgetPosition(it) }
+@Composable
+private fun PlayerContent(c: MediaController, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val activity = ctx.findActivity()
+    val view = LocalView.current
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val inPip = Playback.inPip
+
+    var controls by remember { mutableStateOf(true) }
+    var tick by remember { mutableIntStateOf(0) }
+    var pos by remember { mutableLongStateOf(0L) }
+    var dur by remember { mutableLongStateOf(0L) }
+    var dragging by remember { mutableStateOf(false) }
+    var dragFrac by remember { mutableFloatStateOf(0f) }
+    var fill by remember { mutableStateOf(false) }
+    var speedMenu by remember { mutableStateOf(false) }
+    var hud by remember { mutableStateOf<String?>(null) }
+    var hudKey by remember { mutableIntStateOf(0) }
+
+    BackHandler(onBack = onClose)
+
+    // position / duration ticker
+    LaunchedEffect(c) {
+        while (true) {
+            if (!dragging) pos = c.currentPosition
+            val d = c.duration
+            dur = if (d == C.TIME_UNSET || d < 0) 0L else d
+            delay(250)
         }
-
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (!isPlaying) savePosition()
+    }
+    // hide the controls a few seconds after the last touch while playing
+    LaunchedEffect(controls, tick, Playback.playWhenReady) {
+        if (controls && Playback.playWhenReady) {
+            delay(3500)
+            controls = false
         }
-
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            error = null
-            controller?.let { syncItem(it) }
+    }
+    LaunchedEffect(hudKey) {
+        if (hud != null) {
+            delay(800)
+            hud = null
         }
-
-        override fun onTracksChanged(tracks: Tracks) {
-            isVideo = tracks.isTypeSelected(C.TRACK_TYPE_VIDEO) || tracks.groups.isEmpty()
-        }
-
-        override fun onVideoSizeChanged(videoSize: VideoSize) {
-            videoW = videoSize.width
-            videoH = videoSize.height
-        }
-
-        override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
-            speed = playbackParameters.speed
-        }
-
-        override fun onPlayerError(e: PlaybackException) {
-            error = "This file couldn\u2019t be played (${e.errorCodeName})"
+    }
+    // immersive mode while the player is on screen
+    DisposableEffect(Unit) {
+        val w = activity?.window
+        val ctl = if (w != null) WindowCompat.getInsetsController(w, view) else null
+        ctl?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        ctl?.hide(WindowInsetsCompat.Type.systemBars())
+        onDispose {
+            ctl?.show(WindowInsetsCompat.Type.systemBars())
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            if (w != null) {
+                val lp = w.attributes
+                lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                w.attributes = lp
+            }
         }
     }
 
-    // ------------------------------------------------------------ connection
-    private fun connect(app: Context, onReady: (MediaController) -> Unit) {
-        val c = controller
-        if (c != null && c.isConnected) { onReady(c); return }
-        waiting += onReady
-        if (future != null) return
-        val token = SessionToken(app, ComponentName(app, PlaybackService::class.java))
-        val f = MediaController.Builder(app, token)
-            .setListener(object : MediaController.Listener {
-                override fun onDisconnected(controller: MediaController) {
-                    reset()
+    // ---- video surface
+    AndroidView(
+        factory = { PlayerView(it).apply { useController = false; keepScreenOn = true; player = c } },
+        update = {
+            it.player = c
+            it.resizeMode = if (fill && !inPip) AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            else AspectRatioFrameLayout.RESIZE_MODE_FIT
+        },
+        modifier = Modifier.fillMaxSize()
+    )
+
+    // ---- audio files: cover art instead of a black screen
+    if (!Playback.isVideo && !inPip) {
+        Column(
+            Modifier.fillMaxSize().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Thumb(Playback.thumb, Platform.OTHER, Modifier.size(240.dp), 28.dp)
+        }
+    }
+
+    if (inPip) return
+
+    // ---- gestures: tap = controls, double tap = seek 10s, vertical drag = brightness / volume
+    Box(
+        Modifier.fillMaxSize()
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { controls = !controls; tick++ },
+                    onDoubleTap = { o ->
+                        if (o.x < size.width / 2f) {
+                            Playback.seekBy(-10_000L); hud = "\u221210s"
+                        } else {
+                            Playback.seekBy(10_000L); hud = "+10s"
+                        }
+                        hudKey++
+                    }
+                )
+            }
+            .pointerInput(Unit) {
+                val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                var left = true
+                var vol = 0f
+                var bright = 0.5f
+                detectVerticalDragGestures(
+                    onDragStart = { o ->
+                        left = o.x < size.width / 2f
+                        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                        vol = am.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max
+                        val cur = activity?.window?.attributes?.screenBrightness ?: -1f
+                        bright = if (cur < 0f) 0.5f else cur
+                    },
+                    onVerticalDrag = { change, dy ->
+                        change.consume()
+                        val delta = -dy / size.height * 1.3f
+                        if (left) {
+                            bright = (bright + delta).coerceIn(0.02f, 1f)
+                            val w = activity?.window
+                            if (w != null) {
+                                val lp = w.attributes
+                                lp.screenBrightness = bright
+                                w.attributes = lp
+                            }
+                            hud = "Brightness ${(bright * 100).roundToInt()}%"
+                        } else {
+                            vol = (vol + delta).coerceIn(0f, 1f)
+                            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                            am.setStreamVolume(AudioManager.STREAM_MUSIC, (vol * max).roundToInt(), 0)
+                            hud = "Volume ${(vol * 100).roundToInt()}%"
+                        }
+                        hudKey++
+                    }
+                )
+            }
+    )
+
+    // ---- feedback bubble (seek / brightness / volume)
+    hud?.let {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+            Surface(
+                shape = RoundedCornerShape(50), color = Color(0xB3000000),
+                modifier = Modifier.safeDrawingPadding().padding(top = 72.dp)
+            ) {
+                Text(
+                    it, color = Color.White, style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+        }
+    }
+
+    // ---- error
+    Playback.error?.let { msg ->
+        Column(
+            Modifier.fillMaxSize().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(msg, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = { Playback.retry() }) { Text("Try again") }
+        }
+    }
+
+    // ---- controls
+    AnimatedVisibility(visible = controls, enter = fadeIn(), exit = fadeOut()) {
+        Box(Modifier.fillMaxSize()) {
+            Box(
+                Modifier.fillMaxWidth().height(120.dp).align(Alignment.TopCenter)
+                    .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
+            )
+            Box(
+                Modifier.fillMaxWidth().height(170.dp).align(Alignment.BottomCenter)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000))))
+            )
+
+            // top bar
+            Row(
+                Modifier.fillMaxWidth().align(Alignment.TopCenter).safeDrawingPadding().padding(horizontal = 4.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onClose) {
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Minimise player", tint = Color.White)
                 }
-            })
-            .buildAsync()
-        future = f
-        f.addListener({
-            try {
-                val mc = f.get()
-                mc.addListener(listener)
-                controller = mc
-                syncAll(mc)
-                val todo = waiting.toList()
-                waiting.clear()
-                todo.forEach { it(mc) }
-            } catch (_: Exception) {
-                future = null
-                waiting.clear()
-                showPlayer = false
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        Playback.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    if (Playback.count > 1) {
+                        Text(
+                            "${Playback.index + 1} of ${Playback.count}",
+                            color = Color(0xB3FFFFFF), style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                if (Build.VERSION.SDK_INT >= 26 && Playback.isVideo) {
+                    IconButton(onClick = { (activity as? MainActivity)?.enterPip() }) {
+                        Icon(PipIcon, "Picture in picture", tint = Color.White)
+                    }
+                }
             }
-        }, ContextCompat.getMainExecutor(app))
-    }
 
-    private fun reset() {
-        controller = null
-        future = null
-        hasMedia = false
-        showPlayer = false
-        playWhenReady = false
-        inPip = false
-    }
-
-    private fun syncAll(c: MediaController) {
-        playWhenReady = c.playWhenReady
-        buffering = c.playbackState == Player.STATE_BUFFERING
-        speed = c.playbackParameters.speed
-        repeatOne = c.repeatMode == Player.REPEAT_MODE_ONE
-        syncItem(c)
-    }
-
-    private fun syncItem(c: MediaController) {
-        val item = c.currentMediaItem
-        hasMedia = item != null
-        title = item?.mediaMetadata?.title?.toString() ?: ""
-        subtitle = item?.mediaMetadata?.artist?.toString() ?: ""
-        thumb = item?.mediaMetadata?.artworkUri?.toString() ?: ""
-        index = c.currentMediaItemIndex
-        count = c.mediaItemCount
-    }
-
-    // ------------------------------------------------------------ commands
-    /** Plays [items] starting at [startId]; the rest of the list becomes the queue (next / previous). */
-    fun play(ctx: Context, items: List<DlItem>, startId: String) {
-        val list = items.filter { it.state == DlState.DONE && it.uri != null }
-        if (list.isEmpty()) return
-        val start = list.indexOfFirst { it.id == startId }.coerceAtLeast(0)
-        showPlayer = true
-        val app = ctx.applicationContext
-        connect(app) { c ->
-            // already playing this very item: just bring the player back
-            if (c.currentMediaItem?.mediaId == list[start].id && c.mediaItemCount > 0) {
-                if (c.playbackState == Player.STATE_ENDED) c.seekTo(0)
-                c.play()
-                syncAll(c)
-                return@connect
+            // centre transport
+            Row(
+                Modifier.align(Alignment.Center),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                if (Playback.count > 1) {
+                    CtrlButton(SkipPreviousIcon, "Previous", 30) { c.seekToPreviousMediaItem(); tick++ }
+                }
+                CtrlButton(RewindIcon, "Back 10 seconds", 30) { Playback.seekBy(-10_000L); tick++ }
+                Box(
+                    Modifier.size(72.dp).clip(CircleShape).background(BrandBrush)
+                        .clickable { Playback.togglePlay(); tick++ },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (Playback.buffering && Playback.playWhenReady) {
+                        CircularProgressIndicator(Modifier.size(34.dp), color = Color.White, strokeWidth = 3.dp)
+                    } else {
+                        val icon: ImageVector = when {
+                            Playback.ended -> Icons.Rounded.Refresh
+                            Playback.playWhenReady -> PauseIcon
+                            else -> Icons.Rounded.PlayArrow
+                        }
+                        Icon(icon, "Play or pause", tint = Color.White, modifier = Modifier.size(38.dp))
+                    }
+                }
+                CtrlButton(ForwardIcon, "Forward 10 seconds", 30) { Playback.seekBy(10_000L); tick++ }
+                if (Playback.count > 1) {
+                    CtrlButton(SkipNextIcon, "Next", 30) { c.seekToNextMediaItem(); tick++ }
+                }
             }
-            queue = list
-            error = null
-            c.setMediaItems(list.map { toMediaItem(it) }, start, resumePosition(app, list[start].id))
-            c.prepare()
-            c.play()
-            syncAll(c)
+
+            // bottom: seek bar + options
+            Column(
+                Modifier.fillMaxWidth().align(Alignment.BottomCenter).safeDrawingPadding().padding(horizontal = 12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(clock(if (dragging) (dragFrac * dur).toLong() else pos), color = Color.White, style = MaterialTheme.typography.labelMedium)
+                    Slider(
+                        value = if (dragging) dragFrac else if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f,
+                        onValueChange = { dragging = true; dragFrac = it; tick++ },
+                        onValueChangeFinished = {
+                            if (dur > 0) c.seekTo((dragFrac * dur).toLong())
+                            pos = (dragFrac * dur).toLong()
+                            dragging = false
+                        },
+                        enabled = dur > 0,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color.White,
+                            activeTrackColor = Color.White,
+                            inactiveTrackColor = Color(0x55FFFFFF),
+                            disabledThumbColor = Color(0x88FFFFFF),
+                            disabledActiveTrackColor = Color(0x55FFFFFF),
+                            disabledInactiveTrackColor = Color(0x33FFFFFF),
+                        ),
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                    )
+                    Text(clock(dur), color = Color.White, style = MaterialTheme.typography.labelMedium)
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Box {
+                        OptionChip(speedLabel(Playback.speed)) { speedMenu = true; tick++ }
+                        DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                            Speeds.forEach { s ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            speedLabel(s),
+                                            fontWeight = if (s == Playback.speed) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = { Playback.setSpeed(s); speedMenu = false }
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    IconButton(onClick = { Playback.toggleRepeat(); tick++ }) {
+                        Icon(
+                            if (Playback.repeatOne) RepeatOneIcon else RepeatIcon, "Repeat",
+                            tint = if (Playback.repeatOne) Color.White else Color(0x99FFFFFF)
+                        )
+                    }
+                    if (Playback.isVideo) {
+                        OptionChip(if (fill) "Fill" else "Fit") { fill = !fill; tick++ }
+                        Spacer(Modifier.width(2.dp))
+                        IconButton(onClick = {
+                            activity?.requestedOrientation =
+                                if (landscape) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            tick++
+                        }) {
+                            Icon(
+                                if (landscape) FullscreenExitIcon else FullscreenIcon,
+                                if (landscape) "Exit full screen" else "Full screen", tint = Color.White
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
+}
 
-    private fun toMediaItem(d: DlItem): MediaItem {
-        val meta = MediaMetadata.Builder()
-            .setTitle(d.title)
-            .setArtist(d.platform.label)
-            .apply { if (d.thumb.isNotBlank()) setArtworkUri(Uri.parse(d.thumb)) }
-            .build()
-        return MediaItem.Builder()
-            .setMediaId(d.id)
-            .setUri(Uri.parse(d.uri))
-            .setMediaMetadata(meta)
-            .build()
+@Composable
+private fun CtrlButton(icon: ImageVector, desc: String, dim: Int, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size((dim + 18).dp)) {
+        Icon(icon, desc, tint = Color.White, modifier = Modifier.size(dim.dp))
     }
+}
 
-    fun togglePlay() {
-        val c = controller ?: return
-        if (c.playbackState == Player.STATE_ENDED) c.seekTo(0)
-        if (c.playWhenReady) c.pause() else c.play()
+@Composable
+private fun OptionChip(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(50)).background(Color(0x33FFFFFF)).clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Text(text, color = Color.White, style = MaterialTheme.typography.labelLarge)
     }
+}
 
-    fun pause() { controller?.pause() }
+// ====================================================================== mini player
+/** Sits above the bottom navigation while something is playing and the full player is closed. */
+@Composable
+fun MiniPlayer() {
+    val c = Playback.controller
+    if (c != null && Playback.hasMedia && !Playback.showPlayer) MiniPlayerBar(c)
+}
 
-    fun seekBy(ms: Long) {
-        val c = controller ?: return
-        val d = c.duration
-        val target = (c.currentPosition + ms).coerceAtLeast(0L)
-        c.seekTo(if (d != C.TIME_UNSET) target.coerceAtMost(d) else target)
-    }
-
-    fun setSpeed(s: Float) { controller?.setPlaybackSpeed(s) }
-
-    fun toggleRepeat() {
-        val c = controller ?: return
-        repeatOne = !repeatOne
-        c.repeatMode = if (repeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-    }
-
-    fun retry() {
-        val c = controller ?: return
-        error = null
-        c.prepare()
-        c.play()
-    }
-
-    /** Fully stops playback, clears the queue and removes the notification. */
-    fun stop() {
-        savePosition()
-        val c = controller
-        showPlayer = false
-        inPip = false
-        if (c != null) {
-            c.stop()
-            c.clearMediaItems()
-            c.release()
+@Composable
+private fun MiniPlayerBar(c: MediaController) {
+    var progress by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(c) {
+        while (true) {
+            val d = c.duration
+            progress = if (d > 0 && d != C.TIME_UNSET) (c.currentPosition.toFloat() / d).coerceIn(0f, 1f) else 0f
+            delay(500)
         }
-        future = null
-        controller = null
-        hasMedia = false
-        playWhenReady = false
     }
-
-    /** Downloads that were deleted must not stay in the queue. */
-    fun dropMissing(items: List<DlItem>) {
-        val c = controller ?: return
-        val alive = items.filter { it.state == DlState.DONE }.map { it.id }.toSet()
-        for (i in c.mediaItemCount - 1 downTo 0) {
-            if (c.getMediaItemAt(i).mediaId !in alive) c.removeMediaItem(i)
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+    ) {
+        Column {
+            Row(
+                Modifier.fillMaxWidth().clickable { Playback.showPlayer = true }
+                    .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Thumb(Playback.thumb, Platform.OTHER, Modifier.size(44.dp), 10.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        Playback.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        if (Playback.playWhenReady) "Playing" else "Paused",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+                IconButton(onClick = { Playback.togglePlay() }) {
+                    Icon(
+                        if (Playback.playWhenReady) PauseIcon else Icons.Rounded.PlayArrow,
+                        "Play or pause", tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+                IconButton(onClick = { Playback.stop() }) {
+                    Icon(Icons.Rounded.Close, "Stop", tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+            }
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = Color.Transparent
+            )
         }
-        if (c.mediaItemCount == 0) stop() else syncItem(c)
-    }
-
-    // ------------------------------------------------------------ resume positions
-    private fun prefs() = Engine.app.getSharedPreferences("positions", Context.MODE_PRIVATE)
-
-    private fun resumePosition(ctx: Context, id: String): Long {
-        val p = ctx.getSharedPreferences("positions", Context.MODE_PRIVATE).getLong(id, 0L)
-        return if (p > 5_000L) p - 1_000L else C.TIME_UNSET
-    }
-
-    private fun forgetPosition(id: String) { prefs().edit().remove(id).apply() }
-
-    private fun savePosition() {
-        val c = controller ?: return
-        val id = c.currentMediaItem?.mediaId ?: return
-        val d = c.duration
-        val p = c.currentPosition
-        if (d == C.TIME_UNSET || d <= 0) return
-        if (p > d - 5_000L || p < 5_000L) forgetPosition(id)
-        else prefs().edit().putLong(id, p).apply()
     }
 }
