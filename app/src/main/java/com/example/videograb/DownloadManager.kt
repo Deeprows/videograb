@@ -165,8 +165,9 @@ object DownloadManager {
         val dir = File(app.cacheDir, "dl/$id").apply { mkdirs() }   // kept between pause/resume
         try {
             Engine.awaitReady()
-            val cookies = Engine.cookieFile(item.platform)
+            var cookies = Engine.cookieFile(item.platform)
             var repaired = false
+            var triedLogin = false
             while (true) {
                 try {
                     download(item, id, dir, cookies)
@@ -175,6 +176,15 @@ object DownloadManager {
                     val cur = get(id)
                     val stillMine = cur != null && cur.state == DlState.RUNNING && runs[id] == token
                     if (!stillMine) throw e
+                    if (item.platform == Platform.YOUTUBE && !Engine.useAltClients && Engine.isBotCheck(e.message)) {
+                        Engine.useAltClients = true   // retry once with the no-sign-in player clients
+                        continue
+                    }
+                    if (!triedLogin && cookies == null && item.platform == Platform.YOUTUBE && Engine.isBotCheck(e.message)) {
+                        triedLogin = true
+                        val forced = Engine.cookieFile(item.platform, force = true)
+                        if (forced != null) { cookies = forced; continue }
+                    }
                     if (!repaired && Engine.looksBroken(e.message)) {
                         // The site probably changed. Refresh yt-dlp once and try again.
                         repaired = true
@@ -239,6 +249,7 @@ object DownloadManager {
             addOption("--fragment-retries", "5")
             addOption("--socket-timeout", "20")
             if (cookies != null) addOption("--cookies", cookies)
+            if (item.platform == Platform.YOUTUBE && Engine.useAltClients) Engine.addYoutubeClients(this)
             when {
                 item.quality < 0 -> {
                     addOption("-f", "ba/b")
