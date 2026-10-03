@@ -6,6 +6,7 @@ import android.webkit.CookieManager
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 
@@ -88,28 +90,49 @@ object Engine {
             } catch (e: Exception) {
                 Log.e("VideoGrab", "ffmpeg init failed", e)
             }
-            state.value = EngineState.Ready
-
             // Sites change constantly; the bundled yt-dlp is old by the time it ships.
-            if (System.currentTimeMillis() - Prefs.lastUpdate > UPDATE_EVERY_MS) {
-                try { update(Prefs.nightly) } catch (_: Exception) { }
+            // Flag the update BEFORE announcing Ready, otherwise the first feed request runs
+            // while yt-dlp's files are being replaced and fails (the "works only after refresh" bug).
+            val due = System.currentTimeMillis() - Prefs.lastUpdate > UPDATE_EVERY_MS
+            if (due) updating.value = true
+            state.value = EngineState.Ready
+            if (due) {
+                try { update(Prefs.nightly) } catch (_: Exception) { } finally { updating.value = false }
             }
         }
     }
 
-    suspend fun awaitReady() {
+    /** Waits until yt-dlp has been unpacked (does not wait for updates). */
+    suspend fun awaitInit() {
         val s = state.first { it !is EngineState.Starting }
         if (s is EngineState.Failed) throw IllegalStateException("Download engine failed to start: ${s.message}")
     }
 
+    /** Waits for the engine AND for any update in progress, so yt-dlp is never run mid-update. */
+    suspend fun awaitReady() {
+        awaitInit()
+        withTimeoutOrNull(90_000) { updating.first { !it } }
+    }
+
+    /**
+     * YouTube bot-check workaround: ask for player clients that don't need a sign-in / PO token.
+     * Switched on automatically the first time YouTube answers "confirm you're not a bot".
+     */
+    @Volatile var useAltClients = false
+
+    fun addYoutubeClients(req: YoutubeDLRequest) {
+        req.addOption("--extractor-args", "youtube:player_client=android_vr,tv,web_embedded")
+    }
+
     suspend fun update(nightly: Boolean): String = updateLock.withLock {
-        awaitReady()
+        awaitInit()
         updating.value = true
         try {
             withContext(Dispatchers.IO) {
                 val channel = if (nightly) YoutubeDL.UpdateChannel.NIGHTLY else YoutubeDL.UpdateChannel.STABLE
                 val r = YoutubeDL.getInstance().updateYoutubeDL(app, channel)
                 Prefs.lastUpdate = System.currentTimeMillis()
+                useAltClients = false   // fresh yt-dlp: try the normal clients again first
                 if (r.toString().contains("ALREADY", ignoreCase = true)) "Engine is already up to date"
                 else "Engine updated"
             }
@@ -126,9 +149,11 @@ object Engine {
 
     // ------------------------------------------------------------ cookies
     /** Exports the in-app browser's cookies for [platform] in the Netscape format yt-dlp reads. */
-    suspend fun cookieFile(platform: Platform): String? {
-        if (!Prefs.useLogin) return null
-        if (platform == Platform.YOUTUBE && !Prefs.youtubeLogin) return null
+    suspend fun cookieFile(platform: Platform, force: Boolean = false): String? {
+        if (!force) {
+            if (!Prefs.useLogin) return null
+            if (platform == Platform.YOUTUBE && !Prefs.youtubeLogin) return null
+        }
         if (platform.cookieSites.isEmpty()) return null
         val lines = withContext(Dispatchers.Main) {
             try {
@@ -149,6 +174,9 @@ object Engine {
             }
         }
         if (lines.isEmpty()) return null
+        // forced use (bot-check recovery) only makes sense when the user is really signed in
+        if (force && platform == Platform.YOUTUBE &&
+            lines.none { it.contains("\tSAPISID\t") || it.contains("\t__Secure-3PSID\t") }) return null
         return withContext(Dispatchers.IO) {
             val f = File(app.filesDir, "cookies_${platform.name}.txt")
             f.writeText("# Netscape HTTP Cookie File\n" + lines.joinToString("\n") + "\n")
@@ -161,6 +189,43 @@ object Engine {
         awaitReady()
         val platform = platformOf(url)
         val cookies = cookieFile(platform)
+        val alt = platform == Platform.YOUTUBE && useAltClients
+        val first: Exception = try {
+            return fetchInfoWith(url, platform, cookies, alt, titleHint, thumbHint)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e
+        }
+        if (platform != Platform.YOUTUBE || !isBotCheck(first.message)) throw first
+
+        // Stage 2: other YouTube player clients (no sign-in needed for most videos).
+        if (!alt) {
+            try {
+                val info = fetchInfoWith(url, platform, cookies, true, titleHint, thumbHint)
+                useAltClients = true
+                return info
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+        }
+        // Stage 3: the user's YouTube login from the Browser tab, if they have one.
+        if (cookies == null) {
+            val forced = cookieFile(platform, force = true)
+            if (forced != null) return fetchInfoWith(url, platform, forced, true, titleHint, thumbHint)
+        }
+        throw first
+    }
+
+    fun isBotCheck(raw: String?): Boolean {
+        val m = (raw ?: "").lowercase()
+        return "sign in to confirm" in m || "not a bot" in m
+    }
+
+    private suspend fun fetchInfoWith(
+        url: String, platform: Platform, cookies: String?, altClients: Boolean,
+        titleHint: String, thumbHint: String
+    ): MediaInfo {
         val out = withContext(Dispatchers.IO) {
             val req = YoutubeDLRequest(url).apply {
                 addOption("--dump-single-json")
@@ -169,6 +234,7 @@ object Engine {
                 addOption("--socket-timeout", "20")
                 addOption("--retries", "3")
                 if (cookies != null) addOption("--cookies", cookies)
+                if (altClients) addYoutubeClients(this)
             }
             YoutubeDL.getInstance().execute(req, INFO_ID) { _, _, _ -> }.out
         }
@@ -266,7 +332,7 @@ object Engine {
         val m = (raw ?: "").lowercase()
         return when {
             "sign in to confirm" in m || "not a bot" in m ->
-                "YouTube wants a sign-in check. Sign in on YouTube in the Browser tab, turn on \u201CUse login for YouTube\u201D in Settings, then retry."
+                "YouTube is asking you to sign in before it will share this video. Tap \u201CSign in to YouTube\u201D, log in, then come back and try again."
             "login required" in m || "log in" in m || "private video" in m || "this video is private" in m ||
                 "cookies" in m || "rate-limit reached" in m || "sign in" in m ->
                 "This video needs a login. Sign in to the site in the Browser tab, then try again."
