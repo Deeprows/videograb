@@ -389,7 +389,7 @@ private fun PlayerContent(c: MediaController, onClose: () -> Unit) {
                                             fontWeight = if (s == Playback.speed) FontWeight.Bold else FontWeight.Normal
                                         )
                                     },
-                                    onClick = { Playback.setSpeed(s); speedMenu = false }
+                                    onClick = { Playback.changeSpeed(s); speedMenu = false }
                                 )
                             }
                         }
