@@ -73,7 +73,7 @@ override fun onWindowFocusChanged(hasFocus: Boolean) {
         val cm = getSystemService(ClipboardManager::class.java)
         val clip = cm?.primaryClip
         val text = if (clip != null && clip.itemCount > 0) {
-            clip.itemAt(0).coerceToText(this)?.toString()
+            clip.getItemAt(0).coerceToText(this)?.toString()
         } else {
             null
         }
