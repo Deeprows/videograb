@@ -165,9 +165,8 @@ object DownloadManager {
         val dir = File(app.cacheDir, "dl/$id").apply { mkdirs() }   // kept between pause/resume
         try {
             Engine.awaitReady()
-            var cookies = Engine.cookieFile(item.platform)
+            val cookies = Engine.cookieFile(item.platform)
             var repaired = false
-            var triedLogin = false
             while (true) {
                 try {
                     download(item, id, dir, cookies)
@@ -176,11 +175,6 @@ object DownloadManager {
                     val cur = get(id)
                     val stillMine = cur != null && cur.state == DlState.RUNNING && runs[id] == token
                     if (!stillMine) throw e
-                    if (!triedLogin && cookies == null && item.platform == Platform.YOUTUBE && Engine.isBotCheck(e.message)) {
-                        triedLogin = true
-                        val forced = Engine.cookieFile(item.platform, force = true)
-                        if (forced != null) { cookies = forced; continue }
-                    }
                     if (!repaired && Engine.looksBroken(e.message)) {
                         // The site probably changed. Refresh yt-dlp once and try again.
                         repaired = true
