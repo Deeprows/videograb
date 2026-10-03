@@ -1,257 +1,42 @@
-package com.example.videograb
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-import android.Manifest
-import android.app.PictureInPictureParams
-import android.content.ClipboardManager
-import android.content.res.Configuration
-import android.util.Rational
-import android.content.Intent
-import android.os.Build
-import android.os.Bundle
-import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.viewmodel.compose.viewModel
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
-enum class Dest(val label: String) {
-    HOME("Home"), BROWSER("Browser"), DOWNLOADS("Downloads")
-}
+    <application
+        android:allowBackup="true"
+        android:label="VideoGrab"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.VideoGrab">
 
-private fun Dest.icon(): ImageVector = when (this) {
-    Dest.HOME -> Icons.Rounded.Home
-    Dest.BROWSER -> GlobeIcon
-    Dest.DOWNLOADS -> DownloadIcon
-}
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
 
-class MainActivity : ComponentActivity() {
-    private val sharedLink = mutableStateOf<String?>(null)
-    private val clipLink = mutableStateOf<String?>(null)
-    private var lastClip: String? = null
+        <service
+            android:name=".DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        handleShare(intent)
-        setContent { VideoGrabTheme { AppRoot(sharedLink, clipLink) } }
-    }
+        <service
+            android:name=".PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleShare(intent)
-    }
-
-    // Android only lets the focused app read the clipboard, so check when we gain focus.
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus) return
-        try {
-            val cm = getSystemService(ClipboardManager::class.java)
-            val clip = cm?.primaryClip
-            val text = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(this)?.toString() else null
-            val url = text?.let { extractUrl(it) } ?: return
-            if (url != lastClip && platformOf(url) != Platform.OTHER && looksLikeVideo(url)) {
-                lastClip = url
-                clipLink.value = url
-            }
-        } catch (_: Exception) { }
-    }
-
-    // ---- picture-in-picture
-    fun enterPip() {
-        if (Build.VERSION.SDK_INT < 26 || !Playback.isVideo) return
-        try {
-            val w = Playback.videoW
-            val h = Playback.videoH
-            val ratio = if (w > 0 && h > 0) (w.toFloat() / h).coerceIn(0.42f, 2.38f) else 16f / 9f
-            enterPictureInPictureMode(
-                PictureInPictureParams.Builder()
-                    .setAspectRatio(Rational((ratio * 1000).toInt(), 1000))
-                    .build()
-            )
-        } catch (_: Exception) { }
-    }
-
-    // Home / recents while a video is on screen: float it instead of hiding it.
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        if (Playback.showPlayer && Playback.playWhenReady && Playback.isVideo && Playback.controller != null) enterPip()
-    }
-
-    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        Playback.inPip = isInPictureInPictureMode
-    }
-
-    override fun onStop() {
-        super.onStop()
-        // The PiP window was dismissed with its X button: that means stop watching.
-        if (Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode) {
-            Playback.pause()
-            Playback.inPip = false
-            Playback.showPlayer = false
-        }
-    }
-
-    private fun handleShare(i: Intent?) {
-        // tapped the playback notification
-        if (i?.getBooleanExtra(PlaybackService.EXTRA_OPEN_PLAYER, false) == true && Playback.hasMedia) {
-            Playback.showPlayer = true
-        }
-        if (i?.action == Intent.ACTION_SEND) {
-            val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return
-            extractUrl(text)?.let { sharedLink.value = it }
-        }
-    }
-}
-
-@Composable
-fun AppRoot(sharedLink: MutableState<String?>, clipLink: MutableState<String?>) {
-    val ctx = LocalContext.current
-    val search: SearchViewModel = viewModel()
-    val link: LinkViewModel = viewModel()
-    val items by DownloadManager.items.collectAsState()
-    val engine by Engine.state.collectAsState()
-    val browser = remember { Browser(ctx) }
-    LaunchedEffect(browser) { browser.onFileDownload = { url -> link.open(url) } }
-
-    var tab by remember { mutableStateOf(Dest.HOME) }
-    var showSettings by remember { mutableStateOf(false) }
-    var browserTarget by remember { mutableStateOf<String?>(null) }
-
-    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT >= 33) permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-    }
-    LaunchedEffect(sharedLink.value) {
-        sharedLink.value?.let {
-            link.open(it)
-            sharedLink.value = null
-        }
-    }
-    BackHandler(enabled = tab != Dest.HOME && !Playback.showPlayer && !showSettings) { tab = Dest.HOME }
-
-    // deleted downloads must disappear from the play queue
-    val doneIds = items.filter { it.state == DlState.DONE }.map { it.id }
-    LaunchedEffect(doneIds) { Playback.dropMissing(items) }
-
-    if (Playback.showPlayer) {
-        PlayerScreen { Playback.showPlayer = false }
-    } else if (showSettings) {
-        SettingsScreen { showSettings = false }
-    } else {
-        val activeCount = items.count { it.state == DlState.RUNNING || it.state == DlState.QUEUED }
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
-            bottomBar = {
-                Column {
-                MiniPlayer()
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
-                    Dest.values().forEach { d ->
-                        NavigationBarItem(
-                            selected = tab == d,
-                            onClick = { tab = d },
-                            icon = {
-                                if (d == Dest.DOWNLOADS && activeCount > 0) {
-                                    BadgedBox(badge = { Badge { Text("$activeCount") } }) {
-                                        Icon(d.icon(), contentDescription = d.label)
-                                    }
-                                } else {
-                                    Icon(d.icon(), contentDescription = d.label)
-                                }
-                            },
-                            label = { Text(d.label) },
-                            colors = NavigationBarItemDefaults.colors(
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        )
-                    }
-                }
-                }
-            }
-        ) { pad ->
-            Box(Modifier.padding(pad).fillMaxSize()) {
-                when (tab) {
-                    Dest.HOME -> HomeScreen(
-                        search = search,
-                        clipLink = clipLink.value,
-                        engineState = engine,
-                        activeDownloads = activeCount,
-                        onDismissClip = { clipLink.value = null },
-                        onOpenSite = { browserTarget = it; tab = Dest.BROWSER },
-                        onOpenBrowser = { tab = Dest.BROWSER },
-                        onOpenDownloads = { tab = Dest.DOWNLOADS },
-                        onLink = { url, title, thumb -> link.open(url, title, thumb) },
-                        onSettings = { showSettings = true }
-                    )
-                    Dest.BROWSER -> BrowserScreen(
-                        b = browser,
-                        target = browserTarget,
-                        onTargetConsumed = { browserTarget = null },
-                        onExit = { tab = Dest.HOME },
-                        onDownload = { url, title -> link.open(url, title) }
-                    )
-                    Dest.DOWNLOADS -> DownloadsScreen(items) { d -> Playback.play(ctx, items, d.id) }
-                }
-            }
-        }
-    }
-
-    LinkSheet(
-        state = link.state,
-        onDismiss = { link.dismiss() },
-        onPick = { info, option ->
-            DownloadManager.enqueue(info.url, info.title, option.quality, info.thumb)
-            link.dismiss()
-            clipLink.value = null
-            Toast.makeText(ctx, "Added to downloads", Toast.LENGTH_SHORT).show()
-            tab = Dest.DOWNLOADS
-        },
-        onRetry = { url, title -> link.open(url, title) },
-        onSignIn = { url ->
-            val p = platformOf(url)
-            link.dismiss()
-            if (p == Platform.YOUTUBE) Prefs.youtubeLogin = true   // user chose to sign in, so use it for YouTube
-            browserTarget = if (p == Platform.YOUTUBE)
-                "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fm.youtube.com%2F"
-            else p.home
-            tab = Dest.BROWSER
-        },
-        onAnyway = { url, title ->
-            DownloadManager.enqueue(url, title, 0)
-            link.dismiss()
-            tab = Dest.DOWNLOADS
-        }
-    )
-}
+    </application>
+</manifest>
