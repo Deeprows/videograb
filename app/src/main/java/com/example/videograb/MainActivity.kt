@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.app.PictureInPictureParams
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -52,6 +53,21 @@ class MainActivity : ComponentActivity() {
 private val sharedLink = mutableStateOf<String?>(null)
 private val clipLink = mutableStateOf<String?>(null)
 private var lastClip: String? = null
+
+fun enterPip() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        Playback.inPip = true
+        enterPictureInPictureMode(PictureInPictureParams.Builder().build())
+    }
+}
+
+override fun onPictureInPictureModeChanged(
+    isInPictureInPictureMode: Boolean,
+    newConfig: android.content.res.Configuration
+) {
+    super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+    Playback.inPip = isInPictureInPictureMode
+}
 
 override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -215,6 +231,14 @@ if (current != null) {
                     onOpenSite = {
                         browserTarget = it
                         tab = Dest.BROWSER
+                    },
+                    activeDownloads = activeCount,
+                    onOpenBrowser = {
+                        browserTarget = null
+                        tab = Dest.BROWSER
+                    },
+                    onOpenDownloads = {
+                        tab = Dest.DOWNLOADS
                     },
                     onLink = { url, title, thumb ->
                         link.open(url, title, thumb)
