@@ -90,27 +90,32 @@ class SearchViewModel : ViewModel() {
         heading = title
         job = viewModelScope.launch {
             try {
-                Engine.awaitReady()
-                val cookies = Engine.cookieFile(Platform.YOUTUBE)
-                val found = retryOnce { withContext(Dispatchers.IO) {
-                    val req = YoutubeDLRequest("ytsearch15:$query").apply {
-                        addOption("--flat-playlist")
-                        addOption("--no-warnings")
-                        addOption("--socket-timeout", "15")
-                        if (cookies != null) addOption("--cookies", cookies)
-                        addOption("--print", "%(id)s;;;%(title)s;;;%(uploader,channel)s;;;%(duration_string)s")
-                    }
-                    YoutubeDL.getInstance().execute(req).out.lines().mapNotNull { line ->
-                        val p = line.split(";;;")
-                        if (p.size >= 2 && p[0].isNotBlank())
-                            SearchResult(
-                                p[0].trim(), p[1],
-                                p.getOrElse(2) { "" }.takeIf { it != "NA" } ?: "",
-                                p.getOrElse(3) { "" }.takeIf { it != "NA" } ?: ""
-                            )
-                        else null
-                    }
-                } }
+                // 1) fast path: direct request, works even while the engine is still starting
+                var found: List<SearchResult> = try { Feed.search(query) } catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
+                // 2) fallback: yt-dlp
+                if (found.isEmpty()) {
+                    Engine.awaitReady()
+                    val cookies = Engine.cookieFile(Platform.YOUTUBE)
+                    found = retryOnce { withContext(Dispatchers.IO) {
+                        val req = YoutubeDLRequest("ytsearch15:$query").apply {
+                            addOption("--flat-playlist")
+                            addOption("--no-warnings")
+                            addOption("--socket-timeout", "15")
+                            if (cookies != null) addOption("--cookies", cookies)
+                            addOption("--print", "%(id)s;;;%(title)s;;;%(uploader,channel)s;;;%(duration_string)s")
+                        }
+                        YoutubeDL.getInstance().execute(req).out.lines().mapNotNull { line ->
+                            val p = line.split(";;;")
+                            if (p.size >= 2 && p[0].isNotBlank())
+                                SearchResult(
+                                    p[0].trim(), p[1],
+                                    p.getOrElse(2) { "" }.takeIf { it != "NA" } ?: "",
+                                    p.getOrElse(3) { "" }.takeIf { it != "NA" } ?: ""
+                                )
+                            else null
+                        }
+                    } }
+                }
                 if (my != gen) return@launch
                 results = found
                 if (found.isNotEmpty()) cache[query] = System.currentTimeMillis() to found
