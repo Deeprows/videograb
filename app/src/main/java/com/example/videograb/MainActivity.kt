@@ -71,6 +71,8 @@ override fun onPictureInPictureModeChanged(
 
 override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+Engine.start(applicationContext)
+DownloadManager.ensureInit(applicationContext)
     handleShare(intent)
     setContent { VideoGrabTheme { AppRoot(sharedLink, clipLink) } }
 }
