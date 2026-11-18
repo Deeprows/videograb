@@ -57,7 +57,11 @@ object DownloadManager {
     private val _items = MutableStateFlow<List<DlItem>>(emptyList())
     val items: StateFlow<List<DlItem>> = _items.asStateFlow()
 
+    @Volatile private var inited = false
+    fun ensureInit(context: Context) { if (!inited) init(context) }
+
     fun init(context: Context) {
+        inited = true
         app = context.applicationContext
         try {
             val json = app.getSharedPreferences("downloads", Context.MODE_PRIVATE)
