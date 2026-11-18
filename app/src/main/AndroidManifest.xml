@@ -8,7 +8,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <application
+        android:name=".App"
         android:allowBackup="true"
+        android:extractNativeLibs="true"
         android:label="VideoGrab"
         android:supportsRtl="true"
         android:theme="@style/Theme.VideoGrab">
