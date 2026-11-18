@@ -180,31 +180,6 @@ fun HomeScreen(
             }
         }
 
-        // ---- engine status
-        when (engineState) {
-            is EngineState.Starting -> item {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        "Preparing the download engine\u2026 the first launch takes a moment.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(50)))
-                }
-            }
-            is EngineState.Failed -> item {
-                Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.errorContainer) {
-                    Text(
-                        "The download engine could not start: ${engineState.message}",
-                        modifier = Modifier.padding(14.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-            else -> {}
-        }
-
         // ---- copied link banner
         if (clipLink != null) {
             item {
