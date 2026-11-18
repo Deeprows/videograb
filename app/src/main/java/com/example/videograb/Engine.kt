@@ -74,41 +74,66 @@ object Engine {
     val state = MutableStateFlow<EngineState>(EngineState.Starting)
     val updating = MutableStateFlow(false)
 
-    /** Starts the yt-dlp runtime off the main thread so the app opens instantly. */
+    @Volatile private var started = false
+
+    /** Starts the yt-dlp runtime off the main thread so the app opens instantly. Safe to call twice. */
+    @Synchronized
     fun start(context: Context) {
-        app = context.applicationContext
+        if (!::app.isInitialized) app = context.applicationContext
+        if (started) return
+        started = true
         scope.launch {
-            try {
-                YoutubeDL.getInstance().init(app)
-            } catch (e: Exception) {
-                Log.e("VideoGrab", "yt-dlp init failed", e)
-                state.value = EngineState.Failed(e.message ?: "Could not start the download engine")
+            var ok = false
+            var lastError: Throwable? = null
+            for (attempt in 1..3) {
+                try {
+                    YoutubeDL.getInstance().init(app)
+                    ok = true
+                    break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    lastError = e
+                    Log.e("VideoGrab", "yt-dlp init failed (attempt $attempt)", e)
+                    kotlinx.coroutines.delay(1500L * attempt)
+                }
+            }
+            if (!ok) {
+                state.value = EngineState.Failed(lastError?.message ?: "Could not start the download engine")
+                started = false   // allow a later retry
                 return@launch
             }
             try {
                 FFmpeg.getInstance().init(app)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.e("VideoGrab", "ffmpeg init failed", e)
             }
-            // Sites change constantly; the bundled yt-dlp is old by the time it ships.
-            // Flag the update BEFORE announcing Ready, otherwise the first feed request runs
-            // while yt-dlp's files are being replaced and fails (the "works only after refresh" bug).
+            // Announce Ready right away; updates run silently in the background.
             val due = System.currentTimeMillis() - Prefs.lastUpdate > UPDATE_EVERY_MS
             if (due) {
                 // If the update fails or hangs, retry in 30 min instead of blocking every launch.
                 Prefs.lastUpdate = System.currentTimeMillis() - UPDATE_EVERY_MS + 30L * 60 * 1000
-                updating.value = true
             }
             state.value = EngineState.Ready
             if (due) {
-                try { update(Prefs.nightly) } catch (_: Exception) { } finally { updating.value = false }
+                try { update(Prefs.nightly) } catch (_: Throwable) { }
             }
+        }
+    }
+
+    /** Called when the user (or a download) needs the engine after a failed start. */
+    fun retryStart() {
+        if (state.value is EngineState.Failed) {
+            state.value = EngineState.Starting
+            start(app)
         }
     }
 
     /** Waits until yt-dlp has been unpacked (does not wait for updates). */
     suspend fun awaitInit() {
-        val s = state.first { it !is EngineState.Starting }
+        if (state.value is EngineState.Failed) retryStart()
+        val s = withTimeoutOrNull(120_000) { state.first { it !is EngineState.Starting } }
+            ?: throw IllegalStateException("Download engine is taking too long to start. Please retry.")
         if (s is EngineState.Failed) throw IllegalStateException("Download engine failed to start: ${s.message}")
     }
 
