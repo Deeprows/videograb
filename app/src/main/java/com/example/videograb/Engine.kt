@@ -126,6 +126,7 @@ object Engine {
             }
             state.value = EngineState.Ready
             if (due) {
+                delay(45_000)   // let the first screens load before touching yt-dlp's files
                 try { update(Prefs.nightly) } catch (_: Throwable) { }
             }
         }
@@ -150,7 +151,7 @@ object Engine {
     /** Waits for the engine AND for any update in progress, so yt-dlp is never run mid-update. */
     suspend fun awaitReady() {
         awaitInit()
-        withTimeoutOrNull(20_000) { updating.first { !it } }
+        withTimeoutOrNull(4_000) { updating.first { !it } }
     }
 
     /**
@@ -224,12 +225,16 @@ object Engine {
     }
 
     // ------------------------------------------------------------ link info
+    private val infoCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, MediaInfo>>()
+
     suspend fun fetchInfo(url: String, titleHint: String, thumbHint: String): MediaInfo {
+        infoCache[url]?.let { (t, i) -> if (System.currentTimeMillis() - t < 15L * 60 * 1000) return i }
         val info = withTimeoutOrNull(50_000) { fetchInfoInner(url, titleHint, thumbHint) }
         if (info == null) {
             cancelInfo()
             error("Timed out reading this link. Check your connection and tap Retry.")
         }
+        infoCache[url] = System.currentTimeMillis() to info
         return info
     }
 
