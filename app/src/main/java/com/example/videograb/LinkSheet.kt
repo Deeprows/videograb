@@ -70,18 +70,33 @@ fun LinkSheet(
 @Composable
 private fun LoadingBody(s: LinkState.Loading) {
     Column(
-        Modifier.fillMaxWidth().padding(vertical = 28.dp),
+        Modifier.fillMaxWidth().padding(vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        PlatformBadge(s.platform, 52.dp)
-        CircularProgressIndicator()
-        Text("Reading ${s.platform.label} link\u2026", style = MaterialTheme.typography.titleMedium)
-        Text(
-            s.url, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        if (s.thumb.isNotBlank()) {
+            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f), contentAlignment = Alignment.Center) {
+                Thumb(s.thumb, s.platform, Modifier.fillMaxWidth().aspectRatio(16f / 9f), 18.dp)
+                CircularProgressIndicator()
+            }
+            if (s.title.isNotBlank()) {
+                Text(s.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+            }
+            Text(
+                "Getting video options\u2026",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            PlatformBadge(s.platform, 52.dp)
+            CircularProgressIndicator()
+            Text("Reading ${s.platform.label} link\u2026", style = MaterialTheme.typography.titleMedium)
+            Text(
+                s.url, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -89,13 +104,7 @@ private fun LoadingBody(s: LinkState.Loading) {
 private fun ReadyBody(info: MediaInfo, onPick: (MediaInfo, QualityOption) -> Unit) {
     var sel by remember(info) { mutableIntStateOf(0) }
 
-    Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
-        Thumb(info.thumb, info.platform, Modifier.matchParentSize(), 18.dp)
-        PlatformBadge(info.platform, 30.dp, Modifier.align(Alignment.TopStart).padding(10.dp))
-        if (info.durationSec > 0) {
-            Tag(fmtDuration(info.durationSec), Modifier.align(Alignment.BottomEnd).padding(10.dp))
-        }
-    }
+    SheetPreview(info, info.options[sel])
     Spacer(Modifier.height(14.dp))
     Text(
         info.title.ifBlank { "${info.platform.label} video" },
