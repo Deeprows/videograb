@@ -25,6 +25,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -66,6 +69,7 @@ fun HomeScreen(
     onOpenBrowser: () -> Unit,
     onOpenDownloads: () -> Unit,
     onLink: (url: String, title: String, thumb: String) -> Unit,
+    onWatch: (url: String, title: String, thumb: String) -> Unit,
     onSettings: () -> Unit,
 ) {
     var q by rememberSaveable { mutableStateOf("") }
@@ -281,7 +285,13 @@ fun HomeScreen(
                 item { Text(e, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
             }
             items(search.results) { r ->
-                VideoCard(r) { onLink(r.url, r.title, r.thumb) }
+                VideoCard(
+                    r,
+                    saved = LibraryStore.saved.any { it.url == r.url },
+                    onPlay = { onWatch(r.url, r.title, r.thumb) },
+                    onSave = { LibraryStore.toggleSaved(LibItem(r.url, r.title, r.thumb, r.channel)) },
+                    onDownload = { onLink(r.url, r.title, r.thumb) }
+                )
             }
         }
         if (search.loading && search.results.isNotEmpty()) {
@@ -299,23 +309,45 @@ fun HomeScreen(
 }
 
 @Composable
-private fun VideoCard(r: SearchResult, onClick: () -> Unit) {
+private fun VideoCard(
+    r: SearchResult,
+    saved: Boolean,
+    onPlay: () -> Unit,
+    onSave: () -> Unit,
+    onDownload: () -> Unit,
+) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable(onClick = onClick),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Box {
-            Thumb(r.thumb, Platform.YOUTUBE, Modifier.fillMaxWidth().aspectRatio(16f / 9f), 18.dp)
-            if (r.duration.isNotBlank()) {
-                Tag(r.duration, Modifier.align(Alignment.BottomEnd).padding(8.dp))
+        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(18.dp)).clickable(onClick = onPlay)) {
+            Thumb(r.thumb, Platform.YOUTUBE, Modifier.fillMaxSize(), 18.dp)
+            Box(
+                Modifier.align(Alignment.Center).size(54.dp).clip(CircleShape).background(Color(0x99000000)),
+                contentAlignment = Alignment.Center
+            ) { Icon(Icons.Rounded.PlayArrow, "Play", tint = Color.White, modifier = Modifier.size(34.dp)) }
+            Box(
+                Modifier.align(Alignment.TopStart).padding(8.dp).size(34.dp).clip(CircleShape)
+                    .background(Color(0x99000000)).clickable(onClick = onSave),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    if (saved) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    if (saved) "Remove from saved" else "Save",
+                    tint = if (saved) Color(0xFFFF4D8D) else Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
             }
+            if (r.views.isNotBlank()) Tag(r.views, Modifier.align(Alignment.BottomStart).padding(8.dp))
+            if (r.duration.isNotBlank()) Tag(r.duration, Modifier.align(Alignment.BottomEnd).padding(8.dp))
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp), verticalAlignment = Alignment.Top) {
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f).clickable(onClick = onPlay)) {
                 Text(r.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
-                if (r.channel.isNotBlank()) {
+                val sub = listOf(r.channel, r.age).filter { it.isNotBlank() }.joinToString(" \u00B7 ")
+                if (sub.isNotBlank()) {
                     Text(
-                        r.channel, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        sub, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -323,7 +355,7 @@ private fun VideoCard(r: SearchResult, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(10.dp))
             Box(
-                Modifier.size(42.dp).clip(CircleShape).background(BrandBrush),
+                Modifier.size(42.dp).clip(CircleShape).background(BrandBrush).clickable(onClick = onDownload),
                 contentAlignment = Alignment.Center
             ) { Icon(DownloadIcon, "Download", tint = Color.White, modifier = Modifier.size(22.dp)) }
         }
