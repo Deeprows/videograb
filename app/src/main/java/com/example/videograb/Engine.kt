@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -26,7 +27,16 @@ sealed interface EngineState {
     data class Failed(val message: String) : EngineState
 }
 
-data class QualityOption(val label: String, val quality: Int, val bytes: Long)
+data class QualityOption(
+    val label: String,
+    val quality: Int,
+    val bytes: Long,
+    /** Direct stream for the in-sheet preview player (empty = no preview for this option). */
+    val previewUrl: String = "",
+    /** Separate audio stream when [previewUrl] is video-only. */
+    val previewAudioUrl: String = "",
+    val previewUa: String = "",
+)
 
 data class MediaInfo(
     val url: String,
@@ -215,7 +225,7 @@ object Engine {
 
     // ------------------------------------------------------------ link info
     suspend fun fetchInfo(url: String, titleHint: String, thumbHint: String): MediaInfo {
-        val info = withTimeoutOrNull(75_000) { fetchInfoInner(url, titleHint, thumbHint) }
+        val info = withTimeoutOrNull(50_000) { fetchInfoInner(url, titleHint, thumbHint) }
         if (info == null) {
             cancelInfo()
             error("Timed out reading this link. Check your connection and tap Retry.")
@@ -223,9 +233,32 @@ object Engine {
         return info
     }
 
+    fun isDnsGlitch(raw: String?): Boolean {
+        val m = (raw ?: "").lowercase()
+        return "no address associated" in m || "errno 7" in m || "name resolution" in m ||
+            "unable to resolve" in m || "unknownhost" in m || "transporterror" in m
+    }
+
     private suspend fun fetchInfoInner(url: String, titleHint: String, thumbHint: String): MediaInfo {
-        awaitReady()
         val platform = platformOf(url)
+        // Fast path for YouTube: native request, no yt-dlp start-up, answers in about a second.
+        if (platform == Platform.YOUTUBE) {
+            val id = YtFast.videoId(url)
+            if (id != null) {
+                for (attempt in 0..1) {
+                    try {
+                        return YtFast.info(id, url, titleHint, thumbHint)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w("VideoGrab", "fast YouTube read failed: ${e.message}")
+                        if (!(isDnsGlitch(e.message) || e is java.io.IOException) || attempt == 1) break
+                        delay(500)
+                    }
+                }
+            }
+        }
+        awaitReady()
         val cookies = cookieFile(platform)
         val alt = platform == Platform.YOUTUBE && useAltClients
         val first: Exception = try {
@@ -269,12 +302,26 @@ object Engine {
                 addOption("--dump-single-json")
                 addOption("--no-playlist")
                 addOption("--no-warnings")
-                addOption("--socket-timeout", "20")
-                addOption("--retries", "3")
+                addOption("--socket-timeout", "12")
+                addOption("--retries", "1")
+                addOption("--extractor-retries", "1")
                 if (cookies != null) addOption("--cookies", cookies)
                 if (altClients) addYoutubeClients(this)
             }
-            YoutubeDL.getInstance().execute(req, INFO_ID) { _, _, _ -> }.out
+            var attempt = 0
+            var result = ""
+            while (true) {
+                try {
+                    result = YoutubeDL.getInstance().execute(req, INFO_ID) { _, _, _ -> }.out
+                    break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // transient DNS hiccup ("No address associated with hostname"): just try again
+                    if (++attempt < 3 && isDnsGlitch(e.message)) delay(800L * attempt) else throw e
+                }
+            }
+            result
         }
         val start = out.indexOf('{')
         if (start < 0) error("Could not read this link")
@@ -323,13 +370,21 @@ object Engine {
         return if (!tbr.isNaN() && tbr > 0 && durationSec > 0) (tbr * durationSec * 125).toLong() else 0L
     }
 
-    private fun heightLabel(h: Int) = when {
+    fun heightLabel(h: Int) = when {
         h >= 2160 -> "4K (${h}p)"
         h >= 1440 -> "2K (${h}p)"
         h >= 1080 -> "Full HD (${h}p)"
         h >= 720 -> "HD (${h}p)"
         else -> "${h}p"
     }
+
+    private fun playable(f: JSONObject): Boolean {
+        if (f.str("url").isBlank()) return false
+        val p = f.str("protocol")
+        return p.isBlank() || p == "https" || p == "http" || p.startsWith("m3u8")
+    }
+
+    private fun uaOf(f: JSONObject): String = f.optJSONObject("http_headers")?.optString("User-Agent").orEmpty()
 
     private fun buildOptions(entry: JSONObject, duration: Double): List<QualityOption> {
         val videos = mutableListOf<JSONObject>()
@@ -348,20 +403,48 @@ object Engine {
         }
         val bestAudio = audios.maxByOrNull { it.optDouble("tbr", 0.0) }
         val audioBytes = if (bestAudio != null) estimate(bestAudio, duration) else 0L
+        val previewAudio = audios.filter { playable(it) }
+            .sortedWith(compareByDescending<JSONObject> { it.str("acodec").startsWith("mp4a") }
+                .thenByDescending { it.optDouble("tbr", 0.0) })
+            .firstOrNull()
 
         val heights = videos.map { it.optInt("height", 0) }.filter { it >= 144 }
             .distinct().sortedDescending().take(6)
         val perHeight = heights.map { h ->
-            val best = videos.filter { it.optInt("height", 0) == h }.maxByOrNull { it.optDouble("tbr", 0.0) }!!
+            val atH = videos.filter { it.optInt("height", 0) == h }
+            val best = atH.maxByOrNull { it.optDouble("tbr", 0.0) }!!
             var bytes = estimate(best, duration)
             if (bytes > 0 && best.str("acodec") == "none") bytes += audioBytes
-            QualityOption(heightLabel(h), h, bytes)
+
+            // pick a stream the preview player can actually play at this height
+            val pick = atH.filter { playable(it) }
+                .sortedWith(compareBy<JSONObject> { if (it.str("acodec") != "none") 0 else 1 }
+                    .thenBy { if (it.str("vcodec").startsWith("avc1")) 0 else 1 }
+                    .thenByDescending { it.optDouble("tbr", 0.0) })
+                .firstOrNull()
+            val muxed = pick != null && pick.str("acodec") != "none"
+            QualityOption(
+                heightLabel(h), h, bytes,
+                previewUrl = pick?.str("url").orEmpty(),
+                previewAudioUrl = if (pick != null && !muxed) previewAudio?.str("url").orEmpty() else "",
+                previewUa = pick?.let { uaOf(it) }.orEmpty(),
+            )
         }
 
+        // "Best available" previews the best stream up to 720p (smooth on mobile data)
+        val bestPreview = perHeight.firstOrNull { it.quality <= 720 && it.previewUrl.isNotBlank() }
+            ?: perHeight.lastOrNull { it.previewUrl.isNotBlank() }
+
         val list = mutableListOf<QualityOption>()
-        list += QualityOption("Best available", 0, perHeight.firstOrNull()?.bytes ?: 0L)
+        list += QualityOption(
+            "Best available", 0, perHeight.firstOrNull()?.bytes ?: 0L,
+            bestPreview?.previewUrl.orEmpty(), bestPreview?.previewAudioUrl.orEmpty(), bestPreview?.previewUa.orEmpty()
+        )
         list += perHeight
-        list += QualityOption("MP3 audio", -1, audioBytes)
+        list += QualityOption(
+            "MP3 audio", -1, audioBytes,
+            previewAudio?.str("url").orEmpty(), "", previewAudio?.let { uaOf(it) }.orEmpty()
+        )
         return list
     }
 
@@ -380,7 +463,7 @@ object Engine {
                 "This video is blocked in your region."
             "429" in m -> "Too many requests. Wait a minute and try again."
             "no space left" in m -> "Your phone is out of storage space."
-            "unable to resolve" in m || "network is unreachable" in m ||
+            isDnsGlitch(m) || "network is unreachable" in m ||
                 "connection reset" in m || "name or service not known" in m ->
                 "No internet connection. Check your network and retry."
             "unavailable" in m || "removed" in m || "does not exist" in m || "no video could be found" in m ||
