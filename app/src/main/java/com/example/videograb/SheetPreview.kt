@@ -60,25 +60,33 @@ private fun buildSource(ctx: Context, info: MediaInfo, o: QualityOption): MediaS
     val factory = DefaultDataSource.Factory(ctx, http)
     fun one(u: String): MediaSource {
         val item = MediaItem.fromUri(u)
-        return if (u.contains(".m3u8")) HlsMediaSource.Factory(factory).createMediaSource(item)
+        return if (u.contains(".m3u8") || u.contains("/hls_")) HlsMediaSource.Factory(factory).createMediaSource(item)
         else ProgressiveMediaSource.Factory(factory).createMediaSource(item)
     }
     return if (o.previewAudioUrl.isBlank()) one(o.previewUrl)
     else MergingMediaSource(one(o.previewUrl), one(o.previewAudioUrl))
 }
 
-/** Video frame on top of the quality list: thumbnail + play button, plays inline in the sheet. */
+/**
+ * Video frame with thumbnail + play button; plays inline. [autoStart] begins playback immediately
+ * (watch page). [audioOnly] labels the frame when an audio-only stream is playing.
+ */
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-fun SheetPreview(info: MediaInfo, option: QualityOption) {
+fun SheetPreview(
+    info: MediaInfo,
+    option: QualityOption,
+    autoStart: Boolean = false,
+    audioOnly: Boolean = false,
+) {
     val ctx = LocalContext.current
-    var started by remember(info) { mutableStateOf(false) }
+    var started by remember(info) { mutableStateOf(autoStart) }
     var failed by remember(info, option) { mutableStateOf(false) }
     val usable = option.previewUrl.isNotBlank()
 
     Box(
         Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-            .clip(RoundedCornerShape(18.dp)).background(Color.Black)
+            .clip(RoundedCornerShape(if (autoStart) 0.dp else 18.dp)).background(Color.Black)
     ) {
         if (started && usable) {
             val exo = remember(info) { ExoPlayer.Builder(ctx).build() }
@@ -109,16 +117,24 @@ fun SheetPreview(info: MediaInfo, option: QualityOption) {
                     }
                 }
             )
+            if (audioOnly) {
+                Text(
+                    "Audio only",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
+                )
+            }
             if (failed) {
                 Text(
-                    "This quality can\u2019t be previewed. You can still download it.",
+                    "This quality can\u2019t be played here. You can still download it.",
                     color = Color.White,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.align(Alignment.Center).padding(16.dp)
                 )
             }
         } else {
-            Thumb(info.thumb, info.platform, Modifier.fillMaxSize(), 18.dp)
+            Thumb(info.thumb, info.platform, Modifier.fillMaxSize(), if (autoStart) 0.dp else 18.dp)
             PlatformBadge(info.platform, 30.dp, Modifier.align(Alignment.TopStart).padding(10.dp))
             if (info.durationSec > 0) {
                 Tag(fmtDuration(info.durationSec), Modifier.align(Alignment.BottomEnd).padding(10.dp))
