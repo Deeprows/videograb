@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -40,13 +41,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 enum class Dest(val label: String) {
-HOME("Home"), BROWSER("Browser"), DOWNLOADS("Downloads")
+HOME("Home"), BROWSER("Browser"), DOWNLOADS("Downloads"), LIBRARY("Saved")
 }
 
 private fun Dest.icon(): ImageVector = when (this) {
 Dest.HOME -> Icons.Rounded.Home
 Dest.BROWSER -> GlobeIcon
 Dest.DOWNLOADS -> DownloadIcon
+Dest.LIBRARY -> Icons.Rounded.Favorite
 }
 
 class MainActivity : ComponentActivity() {
@@ -73,6 +75,7 @@ override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
 Engine.start(applicationContext)
 DownloadManager.ensureInit(applicationContext)
+LibraryStore.load(applicationContext)
     handleShare(intent)
     setContent { VideoGrabTheme { AppRoot(sharedLink, clipLink) } }
 }
@@ -126,6 +129,7 @@ clipLink: MutableState<String?>
 val ctx = LocalContext.current
 val search: SearchViewModel = viewModel()
 val link: LinkViewModel = viewModel()
+val watch: WatchViewModel = viewModel()
 val items by DownloadManager.items.collectAsState()
 val engine by Engine.state.collectAsState()
 val browser = remember { Browser(ctx) }
@@ -168,6 +172,14 @@ if (current != null) {
     SettingsScreen {
         showSettings = false
     }
+} else if (watch.state !is WatchState.Idle) {
+    WatchScreen(
+        vm = watch,
+        onClose = { watch.close() },
+        onDownload = { info -> link.show(info) },
+        onQuickDownload = { url, title, thumb -> link.open(url, title, thumb) },
+        onWatch = { url, title, thumb -> watch.open(url, title, thumb) }
+    )
 } else {
     val activeCount = items.count {
         it.state == DlState.RUNNING || it.state == DlState.QUEUED
@@ -245,6 +257,9 @@ if (current != null) {
                     onLink = { url, title, thumb ->
                         link.open(url, title, thumb)
                     },
+                    onWatch = { url, title, thumb ->
+                        watch.open(url, title, thumb)
+                    },
                     onSettings = {
                         showSettings = true
                     }
@@ -267,6 +282,10 @@ if (current != null) {
                 Dest.DOWNLOADS -> DownloadsScreen(items) {
                     playing = it
                 }
+
+                Dest.LIBRARY -> LibraryScreen { url, title, thumb ->
+                    watch.open(url, title, thumb)
+                }
             }
         }
     }
@@ -274,6 +293,7 @@ if (current != null) {
 
 LinkSheet(
     state = link.state,
+    showPreview = watch.state is WatchState.Idle,
     onDismiss = {
         link.dismiss()
     },
@@ -291,6 +311,7 @@ LinkSheet(
             "Added to downloads",
             Toast.LENGTH_SHORT
         ).show()
+        watch.close()
         tab = Dest.DOWNLOADS
     },
     onRetry = { url, title ->
@@ -299,6 +320,7 @@ LinkSheet(
     onAnyway = { url, title ->
         DownloadManager.enqueue(url, title, 0)
         link.dismiss()
+        watch.close()
         tab = Dest.DOWNLOADS
     },
     onSignIn = { url ->
