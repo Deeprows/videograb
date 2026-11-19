@@ -46,6 +46,7 @@ fun LinkSheet(
     onRetry: (url: String, title: String) -> Unit,
     onAnyway: (url: String, title: String) -> Unit,
     onSignIn: (url: String) -> Unit,
+    showPreview: Boolean = true,
 ) {
     if (state is LinkState.Idle) return
     ModalBottomSheet(
@@ -59,7 +60,7 @@ fun LinkSheet(
         ) {
             when (state) {
                 is LinkState.Loading -> LoadingBody(state)
-                is LinkState.Ready -> ReadyBody(state.info, onPick)
+                is LinkState.Ready -> ReadyBody(state.info, showPreview, onPick)
                 is LinkState.Error -> ErrorBody(state, onRetry, onAnyway, onSignIn)
                 else -> {}
             }
@@ -101,10 +102,10 @@ private fun LoadingBody(s: LinkState.Loading) {
 }
 
 @Composable
-private fun ReadyBody(info: MediaInfo, onPick: (MediaInfo, QualityOption) -> Unit) {
+private fun ReadyBody(info: MediaInfo, showPreview: Boolean, onPick: (MediaInfo, QualityOption) -> Unit) {
     var sel by remember(info) { mutableIntStateOf(0) }
 
-    SheetPreview(info, info.options[sel])
+    if (showPreview) SheetPreview(info, info.options[sel])
     Spacer(Modifier.height(14.dp))
     Text(
         info.title.ifBlank { "${info.platform.label} video" },
