@@ -15,7 +15,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-data class SearchResult(val id: String, val title: String, val channel: String, val duration: String) {
+data class SearchResult(
+    val id: String, val title: String, val channel: String, val duration: String,
+    val views: String = "", val age: String = "",
+) {
     val url get() = "https://www.youtube.com/watch?v=$id"
     val thumb get() = "https://i.ytimg.com/vi/$id/mqdefault.jpg"
 }
@@ -118,7 +121,10 @@ class SearchViewModel : ViewModel() {
                 }
                 if (my != gen) return@launch
                 results = found
-                if (found.isNotEmpty()) cache[query] = System.currentTimeMillis() to found
+                if (found.isNotEmpty()) {
+                    cache[query] = System.currentTimeMillis() to found
+                    viewModelScope.launch { YtFast.prefetch(found) }   // makes the first taps instant
+                }
                 if (found.isEmpty()) error = "No results"
             } catch (e: CancellationException) {
                 throw e
