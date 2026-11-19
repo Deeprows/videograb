@@ -39,6 +39,12 @@ class LinkViewModel : ViewModel() {
         }
     }
 
+    /** Opens the quality sheet for a video we already have info for (no new request). */
+    fun show(info: MediaInfo) {
+        job?.cancel()
+        state = LinkState.Ready(info)
+    }
+
     fun dismiss() {
         job?.cancel()
         Engine.cancelInfo()
