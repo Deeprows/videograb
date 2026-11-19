@@ -11,7 +11,7 @@ import kotlinx.coroutines.launch
 
 sealed interface LinkState {
     object Idle : LinkState
-    data class Loading(val url: String, val platform: Platform) : LinkState
+    data class Loading(val url: String, val platform: Platform, val title: String = "", val thumb: String = "") : LinkState
     data class Ready(val info: MediaInfo) : LinkState
     data class Error(val url: String, val title: String, val message: String) : LinkState
 }
@@ -26,7 +26,7 @@ class LinkViewModel : ViewModel() {
         val url = rawUrl.trim()
         job?.cancel()
         Engine.cancelInfo()
-        state = LinkState.Loading(url, platformOf(url))
+        state = LinkState.Loading(url, platformOf(url), titleHint, thumbHint)
         job = viewModelScope.launch {
             val result: LinkState = try {
                 LinkState.Ready(Engine.fetchInfo(url, titleHint, thumbHint))
