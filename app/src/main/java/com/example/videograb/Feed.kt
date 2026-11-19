@@ -81,6 +81,8 @@ object Feed {
         val title = text(v.optJSONObject("title")).ifBlank { return null }
         val channel = text(v.optJSONObject("ownerText")).ifBlank { text(v.optJSONObject("longBylineText")) }
         val duration = text(v.optJSONObject("lengthText"))   // empty for live streams
-        return SearchResult(id, title, channel, duration)
+        val views = text(v.optJSONObject("shortViewCountText")).ifBlank { text(v.optJSONObject("viewCountText")) }
+        val age = text(v.optJSONObject("publishedTimeText"))
+        return SearchResult(id, title, channel, duration, views, age)
     }
 }
