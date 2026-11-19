@@ -69,3 +69,17 @@ val RepeatIcon: ImageVector by lazy {
 val RepeatOneIcon: ImageVector by lazy {
     svg("repeatOne", "M7,7h10v3l4,-4 -4,-4v3H5v6h2V7zM17,17H7v-3l-4,4 4,4v-3h12v-6h-2v4zM13,15V9h-1l-2,1v1h1.5v4H13z")
 }
+
+val HeadphonesIcon: ImageVector by lazy {
+    icon("headphones") {
+        path(stroke = SolidColor(Color.Black), strokeLineWidth = 2f) {
+            moveTo(4f, 15f); verticalLineTo(12f)
+            arcTo(8f, 8f, 0f, false, true, 20f, 12f)
+            verticalLineTo(15f)
+        }
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(3f, 14f); horizontalLineToRelative(4f); verticalLineToRelative(7f); horizontalLineToRelative(-4f); close()
+            moveTo(17f, 14f); horizontalLineToRelative(4f); verticalLineToRelative(7f); horizontalLineToRelative(-4f); close()
+        }
+    }
+}
